@@ -1,0 +1,127 @@
+#!/bin/bash
+# Copyright Nuvoloso.com, 2019
+
+# This script provides a simple interface to the protection store catalog.
+# The volume series and backups in the catalog are presented and selected
+# by the user. After which, the snapshot information is extracted from the
+# catalog to be used to extract the data.
+
+bad_args=false
+function check_arg {
+    if [ -z "$1" ] ; then
+        bad_args=true
+        echo "$2 must be specified"
+    fi
+}
+
+me=`basename $0`
+usage="$me -d <domain ID> -r <region> -b <bucket> -f <output snap metadata file> -s <secret access key> -i <access key id>"
+
+while getopts "d:r:b:f:s:i:" opt; do
+  case ${opt} in
+    s ) AWS_SECRET_ACCESS_KEY=$OPTARG
+        ;;
+    i ) AWS_ACCESS_KEY_ID=$OPTARG
+        ;;
+    d ) catalog_domain_id=$OPTARG
+        ;;
+    r ) catalog_region=$OPTARG
+        ;;
+    b ) catalog_bucket=$OPTARG
+        ;;
+    f ) dest_file=$OPTARG
+        ;;
+    \? ) echo $usage
+        bad_args=true
+        exit
+        ;;
+    esac
+done
+
+# These two could be set in the environment
+check_arg "$AWS_SECRET_ACCESS_KEY" "Secret Access Key"
+check_arg "$AWS_ACCESS_KEY_ID" "Access Key ID"
+
+check_arg "$catalog_domain_id" "Catalog Domain ID"
+check_arg "$catalog_region" "Catalog Region"
+check_arg "$catalog_bucket" "Catalog Bucket"
+check_arg "$dest_file" "Destination Metadata File Name"
+# dest_file is optional
+
+if [ $bad_args = "true" ] ; then
+    echo $usage
+    exit 1
+fi
+
+# Avoid seeing phrase in Command history so prompt
+echo "Enter the Pass phrase for the catalog domain:"
+read -s catalog_passphrase
+
+echo "Retreiving catalog information"
+
+# Pointers to the executables needed
+catalog_prog=${HOME}/go/src/github.com/Nuvoloso/kontroller/cmd/catalog/catalog
+
+# dump out the whole catalog in a table
+$catalog_prog list-snapshots \
+    --secret-key-id=$AWS_ACCESS_KEY_ID \
+    --secret-access-key=$AWS_SECRET_ACCESS_KEY \
+    -b $catalog_bucket \
+    -r $catalog_region \
+    -p $catalog_passphrase \
+    -d $catalog_domain_id
+
+# A file to contain the catalog JSON
+catalog_file=/tmp/catalog.$$
+# Collect the catalog in JSON so it can be parsed
+$catalog_prog list-snapshots \
+    --secret-key-id=$AWS_ACCESS_KEY_ID \
+    --secret-access-key=$AWS_SECRET_ACCESS_KEY \
+    -b $catalog_bucket \
+    -r $catalog_region \
+    -p $catalog_passphrase \
+    -d $catalog_domain_id \
+    -o json > $catalog_file
+
+# Display all of the volume backups contained in the catalog
+# and choose one to restore.
+echo "You have backups from the following volumes:"
+echo
+
+cat $catalog_file | jq -r .[].volumeSeries | sort | uniq
+
+echo
+echo "Which volume series would you like to recover?"
+read volume
+
+echo You have backups for $volume from the following times:
+
+# Extract the list of backups for that volume series
+filter_file=/tmp/filter.$$
+echo ".[] | select(.volumeSeries == \"$volume\").time" > $filter_file
+cat $catalog_file | jq -rf $filter_file | sort
+rm $filter_file
+
+echo "Which time would you like to recover?"
+read time
+
+# Get the snapid for that backup
+echo ".[] | select(.volumeSeries == \"$volume\") | select(.time == \"$time\").snapID" > $filter_file
+snap_id=`cat $catalog_file | jq -rf $filter_file`
+rm $filter_file
+rm $catalog_file
+
+snapshot_file=/tmp/snapinfo.$$
+
+# Get the snapshot metadata for this snapshot
+$catalog_prog get-snapshot-metadata \
+    --secret-key-id=$AWS_ACCESS_KEY_ID \
+    --secret-access-key=$AWS_SECRET_ACCESS_KEY \
+    -b $catalog_bucket \
+    -r $catalog_region \
+    -p $catalog_passphrase \
+    -d $catalog_domain_id \
+    -s $snap_id \
+    -f $dest_file
+
+echo "snapshot metadata stored in $dest_file"

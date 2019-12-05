@@ -1,0 +1,185 @@
+# Copyright 2019 Tad Lebeck
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#    http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{namespace}}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: mysql-pass
+  namespace: {{namespace}}
+type: Opaque
+data:
+  password: dGVzdHNlY3JldA==
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{wpname}}
+  namespace: {{namespace}}
+  labels:
+    app: {{applabel}}
+spec:
+  ports:
+    - port: 80
+  selector:
+    app: {{applabel}}
+    tier: frontend
+  type: LoadBalancer
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{wpname}}
+  namespace: {{namespace}}
+  labels:
+    app: {{applabel}}
+spec:
+  selector:
+    matchLabels:
+      app: {{applabel}}
+      tier: frontend
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app: {{applabel}}
+        tier: frontend
+      annotations:
+        {% if cgname -%}
+        nuvoloso.com/consistency-group-name: "{{cgname}}"
+        {%- endif %}
+        {% if cgdescription -%}
+        nuvoloso.com/consistency-group-description: "{{cgdescription}}"
+        {%- endif %}
+        {%- if cgtags -%}
+        {% for tag in cgtags %}
+        nuvoloso.com/consistency-group-tag-{{loop.index}}: "{{tag}}"
+        {%- endfor %}
+        {%- endif %}
+        {% if agname -%}
+        nuvoloso.com/application-group-name: "{{agname}}"
+        {%- endif %}
+        {% if agdescription -%}
+        nuvoloso.com/application-group-description: "{{agdescription}}"
+        {%- endif %}
+        {%- if agtags -%}
+        {% for tag in agtags %}
+        nuvoloso.com/application-group-tag-{{loop.index}}: "{{tag}}"
+        {%- endfor %}
+        {%- endif %}
+    spec:
+      containers:
+      - image: wordpress:4.8-apache
+        name: wordpress
+        env:
+        - name: WORDPRESS_DB_HOST
+          value: {{sqlname}}
+        - name: WORDPRESS_DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: mysql-pass
+              key: password
+        ports:
+        - containerPort: 80
+          name: wordpress
+        volumeMounts:
+        - name: wordpress-persistent-storage
+          mountPath: /var/www/html
+      volumes:
+      - name: wordpress-persistent-storage
+        persistentVolumeClaim:
+          claimName: {{wpclaimname}}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{sqlname}}
+  namespace: {{namespace}}
+  labels:
+    app: {{applabel}}
+spec:
+  ports:
+    - port: 3306
+  selector:
+    app: {{applabel}}
+    tier: mysql
+  clusterIP: None
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{sqlname}}
+  namespace: {{namespace}}
+  labels:
+    app: {{applabel}}
+spec:
+  selector:
+    matchLabels:
+      app: {{applabel}}
+      tier: mysql
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app: {{applabel}}
+        tier: mysql
+      annotations:
+        {% if cgname -%}
+        nuvoloso.com/consistency-group-name: "{{cgname}}"
+        {%- endif %}
+        {% if cgdescription -%}
+        nuvoloso.com/consistency-group-description: "{{cgdescription}}"
+        {%- endif %}
+        {%- if cgtags -%}
+        {% for tag in cgtags %}
+        nuvoloso.com/consistency-group-tag-{{loop.index}}: "{{tag}}"
+        {%- endfor %}
+        {%- endif %}
+        {% if agname -%}
+        nuvoloso.com/application-group-name: "{{agname}}"
+        {%- endif %}
+        {% if agdescription -%}
+        nuvoloso.com/application-group-description: "{{agdescription}}"
+        {%- endif %}
+        {%- if agtags -%}
+        {% for tag in agtags %}
+        nuvoloso.com/application-group-tag-{{loop.index}}: "{{tag}}"
+        {%- endfor %}
+        {%- endif %}
+    spec:
+      containers:
+      - image: mysql:5.6
+        name: mysql
+        env:
+        - name: MYSQL_ROOT_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: mysql-pass
+              key: password
+        ports:
+        - containerPort: 3306
+          name: mysql
+        volumeMounts:
+        - name: mysql-persistent-storage
+          mountPath: /var/lib/mysql
+      volumes:
+      - name: mysql-persistent-storage
+        persistentVolumeClaim:
+          claimName: {{sqlclaimname}}

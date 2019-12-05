@@ -1,0 +1,87 @@
+#!/bin/bash
+# Copyright Nuvoloso.com, 2019
+
+bad_args=false
+function check_arg {
+    if [ -z "$1" ] ; then
+        bad_args=true
+        echo "$2 must be specified"
+    fi
+}
+
+me=`basename $0`
+usage="$me -m <snapshot metadata file> -s <backup secret access key> -i <backup access key id> -f <file to fill>"
+
+while getopts "m:f:s:i:" opt; do
+  case ${opt} in
+    s ) AWS_SECRET_ACCESS_KEY=$OPTARG
+        ;;
+    i ) AWS_ACCESS_KEY_ID=$OPTARG
+        ;;
+    m ) snapshot_metadata_file=$OPTARG
+        ;;
+    f ) dest_file=$OPTARG
+        ;;
+    \? ) echo $usage
+        bad_args=true
+        exit
+        ;;
+    esac
+done
+
+# These two could be set in the environment
+check_arg "$AWS_SECRET_ACCESS_KEY" "Secret Access Key"
+check_arg "$AWS_ACCESS_KEY_ID" "Access Key ID"
+
+check_arg "$snapshot_metadata_file" "Snapshot Metadata File"
+check_arg "$dest_file" "File to Fill"
+
+if [ "$bad_args" = "true" ] ; then
+    echo $usage
+    exit 1
+fi
+
+# Pointers to the executables needed
+setup_copy_prog=${HOME}/go/src/github.com/Nuvoloso/kontroller/cmd/setup_recover_copy/setup_recover_copy
+copy_prog=${HOME}/go/src/github.com/Nuvoloso/kontroller/cmd/copy/copy
+
+# Extract some prompting information from the snapshot metadata
+backup_domain_name=`cat $snapshot_metadata_file | jq -r .ProtectionDomainName`
+backup_size=`cat $snapshot_metadata_file | jq -r .SizeBytes`
+
+# Get the pass phrase of the backup domain from the user
+echo "Enter the Pass Phrase for the backup protection domain ($backup_domain_name):"
+read -s backup_passphrase
+
+copy_args_file=/tmp/copyargs.$$
+copy_results_file=/tmp/copyresults.$$
+
+# Check the size of the destination file
+if [ -f $dest_file ] ; then
+    fsize=`stat -c "%s" $dest_file`
+    if [ $fsize -lt $backup_size ] ; then
+        echo "The destination for the backup ($dest_file) is smaller ($fsize) than the backup ($backup_size)"
+        echo "Either remove the file or pick an existing file of the proper size"
+        exit
+    fi
+else
+    touch $dest_file
+fi
+
+set -x
+
+# Create copy arguments to get the data
+$setup_copy_prog \
+    -snap-info-file $snapshot_metadata_file \
+    access-key-id $AWS_ACCESS_KEY_ID \
+    secret-access-key $AWS_SECRET_ACCESS_KEY \
+    -pass-phrase $backup_passphrase \
+    -device $dest_file \
+    -copy-args-file $copy_args_file
+
+# Do the copy
+$copy_prog -args $copy_args_file -results $copy_results_file
+
+rm $copy_args_file
+cat $copy_results_file
+rm $copy_results_file

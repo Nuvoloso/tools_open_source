@@ -1,0 +1,13 @@
+certs/*.crt
+certs/*.key
+certs/*.pem
+!certs/ca.crt
+!certs/ca.key
+deploy
+.vscode
+
+# VS Code likes to create this even though there are no go files in this repo
+go.mod
+
+# virtualenv directory created by 'make all'
+venv
